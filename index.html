@@ -368,6 +368,51 @@
       padding: 10px 14px; font-size: 13px; color: #92400E; margin-bottom: 8px; line-height: 1.5;
     }
 
+    /* ── Favicon + URL ── */
+    .entry-favicon {
+      width: 18px; height: 18px; border-radius: 3px; flex-shrink: 0;
+      object-fit: contain; background: transparent; vertical-align: middle;
+    }
+    .entry-url-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 30px; height: 30px; border: 1px solid var(--border); border-radius: 6px;
+      background: white; cursor: pointer; font-size: 14px; transition: all 0.15s;
+      text-decoration: none; color: var(--text-secondary); flex-shrink: 0;
+    }
+    .entry-url-btn:hover { background: var(--primary-light); color: var(--primary); border-color: #C7D2FE; }
+    .url-hint { font-size: 12px; margin-top: 4px; min-height: 16px; }
+
+    /* ── Password History ── */
+    .history-section {
+      margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+    }
+    .history-toggle {
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; user-select: none; padding: 1px 0;
+    }
+    .history-toggle-label {
+      font-size: 12px; font-weight: 600; color: var(--text-secondary);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .history-cnt {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 100px;
+      padding: 0 6px; font-size: 11px; font-weight: 600;
+    }
+    .history-arrow { font-size: 10px; color: var(--text-muted); transition: transform 0.2s; }
+    .history-arrow.open { transform: rotate(90deg); }
+    .history-items { padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .history-item {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      background: var(--bg); border-radius: var(--radius-sm); border: 1px solid var(--border);
+    }
+    .history-item-info { flex: 1; min-width: 0; }
+    .history-item-time { font-size: 11px; color: var(--text-muted); margin-bottom: 3px; }
+    .history-item-pw {
+      font-size: 13px; font-family: 'SF Mono','Fira Code','Courier New',monospace;
+      color: var(--text); word-break: break-all; letter-spacing: 0.5px;
+    }
+    .history-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
     /* ── Export format tabs ── */
     .export-fmt-tabs {
       display: flex; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
@@ -605,6 +650,11 @@
     <!-- Password section -->
     <div id="ef-pw-section">
       <div class="form-group">
+        <label class="form-label">URL（可选）</label>
+        <input type="text" id="ef-url" class="form-input" placeholder="https://example.com" spellcheck="false" autocomplete="off">
+        <div class="url-hint" id="ef-url-hint"></div>
+      </div>
+      <div class="form-group">
         <label class="form-label">用户名 / 邮箱</label>
         <input type="text" id="ef-user" class="form-input" placeholder="用户名或邮箱地址" autocomplete="off" spellcheck="false">
       </div>
@@ -627,6 +677,15 @@
           <button class="btn-icon" id="ef-totp-toggle" title="显示 / 隐藏密钥">&#128065;&#65039;</button>
         </div>
         <div class="form-hint">填写后可生成动态验证码（TOTP / Google Authenticator 兼容）</div>
+      </div>
+      <!-- History (edit only) -->
+      <div id="ef-history-section" class="hidden" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <span style="font-size:14px;font-weight:600;color:var(--text);">&#128336; 密码历史</span>
+          <button type="button" class="btn btn-secondary" onclick="clearAllHistoryModal()"
+                  style="font-size:12px;padding:5px 10px;color:var(--danger);border-color:var(--danger);">清除全部</button>
+        </div>
+        <div id="ef-history-list"></div>
       </div>
     </div>
     <!-- Secret section -->
@@ -1170,6 +1229,147 @@ function setTagFilter(tag) {
   renderVault();
 }
 
+/* ── URL helpers ── */
+function extractDomain(url) {
+  if (!url) return '';
+  try { return new URL(url).hostname; } catch { return ''; }
+}
+function faviconUrl(url) {
+  const d = extractDomain(url);
+  return d ? 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(d) + '&sz=32' : '';
+}
+function normalizeUrl(url) {
+  if (!url) return '';
+  const t = url.trim();
+  if (!t) return '';
+  if (/^https?:\/\//i.test(t)) return t;
+  return 'https://' + t;
+}
+function isValidUrl(url) {
+  if (!url) return true;
+  try { new URL(url); return true; } catch { return false; }
+}
+
+/* ── History helpers ── */
+function formatHistDate(isoStr) {
+  if (!isoStr) return '';
+  try {
+    return new Date(isoStr).toLocaleString('ja-JP', {
+      timeZone: 'Asia/Tokyo', year: 'numeric', month: 'long',
+      day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  } catch { return isoStr; }
+}
+function renderModalHistory() {
+  const sec = $('ef-history-section');
+  if (!editingId) { sec.classList.add('hidden'); return; }
+  const e = vault.entries.find(x => x.id === editingId);
+  if (!e || !e.history || !e.history.length) { sec.classList.add('hidden'); return; }
+  sec.classList.remove('hidden');
+  const items = e.history.slice().reverse();
+  $('ef-history-list').innerHTML = items.map((h, i) => {
+    const realIdx = e.history.length - 1 - i;
+    return `<div class="history-item">
+      <div class="history-item-info">
+        <div class="history-item-time">${formatHistDate(h.updated_at)}</div>
+        <div class="history-item-pw" id="mhpw-${realIdx}">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</div>
+      </div>
+      <div class="history-item-actions">
+        <button class="btn-mini" id="mhpw-tog-${realIdx}" onclick="toggleModalHistPw(${realIdx})" data-vis="0">显示</button>
+        <button class="btn-mini" onclick="copyModalHistPw(${realIdx})">复制</button>
+        <button class="btn-mini" onclick="deleteModalHistItem(${realIdx})" style="color:var(--danger);">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleModalHistPw(idx) {
+  const e = vault.entries.find(x => x.id === editingId);
+  const el = $('mhpw-' + idx), tog = $('mhpw-tog-' + idx);
+  if (!e || !e.history || !e.history[idx] || !el) return;
+  if (tog.dataset.vis === '0') {
+    el.textContent = e.history[idx].password; tog.textContent = '隐藏'; tog.dataset.vis = '1';
+  } else {
+    el.textContent = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'; tog.textContent = '显示'; tog.dataset.vis = '0';
+  }
+}
+function copyModalHistPw(idx) {
+  const e = vault.entries.find(x => x.id === editingId);
+  if (!e || !e.history || !e.history[idx]) return;
+  navigator.clipboard.writeText(e.history[idx].password).catch(() => {});
+  toast('历史密码已复制');
+}
+async function deleteModalHistItem(idx) {
+  const e = vault.entries.find(x => x.id === editingId);
+  if (!e || !e.history) return;
+  e.history.splice(idx, 1);
+  await persistVault();
+  renderModalHistory();
+}
+async function clearAllHistoryModal() {
+  const e = vault.entries.find(x => x.id === editingId);
+  if (!e) return;
+  e.history = [];
+  await persistVault();
+  renderModalHistory();
+  toast('已清除全部历史记录');
+}
+
+/* ── Card history section ── */
+function renderHistorySection(e) {
+  if (!e.history || !e.history.length) return '';
+  const items = e.history.slice().reverse();
+  const listHtml = items.map((h, i) => {
+    const ri = e.history.length - 1 - i;
+    const cbKey = 'hcb-' + e.id + '-' + ri;
+    return `<div class="history-item">
+      <div class="history-item-info">
+        <div class="history-item-time">${formatHistDate(h.updated_at)}</div>
+        <div class="history-item-pw" id="hpw-${e.id}-${ri}">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</div>
+      </div>
+      <div class="history-item-actions">
+        <button class="btn-mini" id="hpw-tog-${e.id}-${ri}" onclick="toggleHistPw('${e.id}',${ri})" data-vis="0">显示</button>
+        <button id="cbtn-${cbKey}" class="${cbBtnClass(cbKey)}" onclick="copyHistPw('${e.id}',${ri})">${cbBtnText(cbKey,'复制')}</button>
+        <button class="btn-mini" onclick="deleteHistItem('${e.id}',${ri})" style="color:var(--danger);">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="history-section">
+    <div class="history-toggle" onclick="toggleHistSection('${e.id}')">
+      <span class="history-toggle-label">&#128336; 密码历史 <span class="history-cnt">${e.history.length}</span></span>
+      <span class="history-arrow" id="hist-arrow-${e.id}">&#9654;</span>
+    </div>
+    <div class="history-items hidden" id="hist-${e.id}">${listHtml}</div>
+  </div>`;
+}
+function toggleHistSection(id) {
+  const el = $('hist-' + id), arrow = $('hist-arrow-' + id);
+  if (!el) return;
+  const hidden = el.classList.toggle('hidden');
+  if (arrow) arrow.classList.toggle('open', !hidden);
+}
+function toggleHistPw(id, idx) {
+  const el = $('hpw-' + id + '-' + idx), tog = $('hpw-tog-' + id + '-' + idx);
+  const e = vault.entries.find(x => x.id === id);
+  if (!e || !e.history || !e.history[idx] || !el) return;
+  if (tog.dataset.vis === '0') {
+    el.textContent = e.history[idx].password; tog.textContent = '隐藏'; tog.dataset.vis = '1';
+  } else {
+    el.textContent = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'; tog.textContent = '显示'; tog.dataset.vis = '0';
+  }
+}
+function copyHistPw(id, idx) {
+  const e = vault.entries.find(x => x.id === id);
+  if (!e || !e.history || !e.history[idx]) return;
+  copyWithTimer(e.history[idx].password, 'hcb-' + id + '-' + idx, '复制', '历史密码已复制');
+}
+async function deleteHistItem(id, idx) {
+  const e = vault.entries.find(x => x.id === id);
+  if (!e || !e.history) return;
+  e.history.splice(idx, 1);
+  await persistVault();
+  renderVault();
+}
+
 /* ── Secret helpers ── */
 function setEditKind(kind) {
   editingKind = kind;
@@ -1288,7 +1488,8 @@ function sortedFiltered() {
         const inSite = e.site.toLowerCase().includes(q);
         const inUser = (e.username||'').toLowerCase().includes(q);
         const inPlat = (e.platform||'').toLowerCase().includes(q);
-        if (!inSite && !inUser && !inPlat) return false;
+        const inUrl  = extractDomain(e.url||'').toLowerCase().includes(q);
+        if (!inSite && !inUser && !inPlat && !inUrl) return false;
       }
       return true;
     })
@@ -1323,14 +1524,23 @@ function renderPasswordCard(e) {
         <button id="cbtn-${totpKey}" class="${cbBtnClass(totpKey)}" onclick="copyTotp('${e.id}')">${cbBtnText(totpKey,'复制')}</button>
       </div>
     </div>` : '';
+  const favHtml = e.url
+    ? `<img class="entry-favicon" src="${esc(faviconUrl(e.url))}" alt="" onerror="this.style.display='none'">`
+    : '';
+  const urlBtn = e.url
+    ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer" class="entry-url-btn" title="${esc(extractDomain(e.url)||e.url)}" onclick="event.stopPropagation()">&#10148;</a>`
+    : '';
   return `
   <div class="entry-card">
     <div class="entry-head">
-      <div>
+      <div style="min-width:0;flex:1;">
         ${tags ? `<div class="entry-tags">${tags}</div>` : ''}
-        <div class="entry-site">&#128273; ${esc(e.site)}</div>
+        <div class="entry-site" style="display:flex;align-items:center;gap:7px;">
+          ${favHtml}&#128273; ${esc(e.site)}
+        </div>
       </div>
       <div class="entry-action-btns">
+        ${urlBtn}
         <button class="btn-icon" onclick="openEdit('${e.id}')" title="编辑">&#9999;&#65039;</button>
         <button class="btn-icon" onclick="openDelete('${e.id}')" title="删除" style="color:var(--danger)">&#128465;&#65039;</button>
       </div>
@@ -1353,6 +1563,7 @@ function renderPasswordCard(e) {
     </div>
     ${totpRow}
     ${e.notes ? `<div class="entry-notes">${esc(e.notes)}</div>` : ''}
+    ${renderHistorySection(e)}
   </div>`;
 }
 
@@ -1452,13 +1663,14 @@ function openEntryModal(id = null, forceKind = null) {
       $('ef-user').value  = e.username   || '';
       $('ef-pass').value  = e.password   || '';
       $('ef-totp').value  = e.totpSecret || '';
+      $('ef-url').value   = e.url        || '';
       $('ef-pass').type = $('ef-totp').type = 'password';
     }
     setEditKind(kind);
   } else {
     const kind = forceKind || 'password';
     $('ef-site').value = $('ef-user').value = $('ef-pass').value = '';
-    $('ef-totp').value = $('ef-notes').value = '';
+    $('ef-totp').value = $('ef-notes').value = $('ef-url').value = '';
     $('ef-pass').type = $('ef-totp').type = 'password';
     $('ef-secret-type').value  = 'API Key';
     $('ef-secret-value').value = '';
@@ -1468,9 +1680,11 @@ function openEntryModal(id = null, forceKind = null) {
     $('ef-expires').value  = '';
     setEditKind(kind);
   }
+  $('ef-url-hint').textContent = '';
   $('ef-tag-input').value = '';
   renderTagPicker();
   renderEnvPicker();
+  renderModalHistory();
   $('entry-modal').classList.remove('hidden');
   setTimeout(() => $('ef-site').focus(), 80);
 }
@@ -1519,6 +1733,12 @@ async function saveEntry(forceIgnoreDup = false) {
   const user = $('ef-user').value.trim();
   const pass = $('ef-pass').value;
   const totp = $('ef-totp').value.trim();
+  const url  = normalizeUrl($('ef-url').value);
+  // URL hint (non-blocking)
+  const urlHint = $('ef-url-hint');
+  if (url && !isValidUrl(url)) {
+    urlHint.textContent = '⚠️ URL 格式可能不正确'; urlHint.style.color = 'var(--warning)';
+  } else { urlHint.textContent = ''; }
   if (!pass) {
     err.textContent = '请填写密码'; err.classList.add('show');
     $('ef-pass').focus(); return;
@@ -1543,9 +1763,18 @@ async function saveEntry(forceIgnoreDup = false) {
   const now = Date.now();
   if (editingId) {
     const idx = vault.entries.findIndex(e => e.id === editingId);
-    if (idx >= 0) vault.entries[idx] = { ...vault.entries[idx], kind:'password', site, username:user, password:pass, totpSecret:totp, notes, tags, updatedAt:now };
+    if (idx >= 0) {
+      const existing = vault.entries[idx];
+      // Password history: track changes
+      let history = existing.history || [];
+      if (existing.password && existing.password !== pass) {
+        history = [...history, { password: existing.password, updated_at: new Date().toISOString() }];
+        if (history.length > 3) history.shift();
+      }
+      vault.entries[idx] = { ...existing, kind:'password', site, url, username:user, password:pass, totpSecret:totp, notes, tags, history, updatedAt:now };
+    }
   } else {
-    vault.entries.push({ id:uid(), kind:'password', site, username:user, password:pass, totpSecret:totp, notes, tags, createdAt:now, updatedAt:now });
+    vault.entries.push({ id:uid(), kind:'password', site, url, username:user, password:pass, totpSecret:totp, notes, tags, history:[], createdAt:now, updatedAt:now });
   }
   await persistVault();
   generateAllTotpCodes();
@@ -1880,7 +2109,8 @@ function toBitwardenItem(e) {
   }
   return { id: e.id, type: 1, name: e.site, notes: e.notes || null,
     login: { username: e.username || null, password: e.password || null,
-      uris: [], totp: e.totpSecret || null } };
+      uris: e.url ? [{ uri: e.url, match: null }] : [],
+      totp: e.totpSecret || null } };
 }
 
 /* ── Import — format detection ── */
@@ -1925,9 +2155,10 @@ function parseChromeCsv(text) {
   return parseCSV(text).map(r => ({
     id: uid(), kind: 'password',
     site: r['name'] || r['title'] || '',
+    url: r['url'] || '',
     username: r['username'] || '',
     password: r['password'] || '',
-    totpSecret: '', notes: r['url'] ? 'URL: ' + r['url'] : '',
+    totpSecret: '', notes: '', history: [],
     tags: [], createdAt: Date.now(), updatedAt: Date.now()
   })).filter(e => e.site || e.password);
 }
@@ -1937,10 +2168,11 @@ function parseICloudCsv(text) {
     return {
       id: uid(), kind: 'password',
       site: r['title'] || '',
+      url: r['url'] || '',
       username: r['username'] || '',
       password: r['password'] || '',
       totpSecret: m ? m[1] : '',
-      notes: r['notes'] || '',
+      notes: r['notes'] || '', history: [],
       tags: [], createdAt: Date.now(), updatedAt: Date.now()
     };
   }).filter(e => e.site || e.password);
@@ -1956,9 +2188,10 @@ function parseBitwardenPlain(data) {
         tags, createdAt: Date.now(), updatedAt: Date.now() };
     }
     return { id: uid(), kind: 'password', site: item.name || '',
+      url: item.login?.uris?.[0]?.uri || '',
       username: item.login?.username || '', password: item.login?.password || '',
       totpSecret: item.login?.totp || '', notes: item.notes || '',
-      tags, createdAt: Date.now(), updatedAt: Date.now() };
+      history: [], tags, createdAt: Date.now(), updatedAt: Date.now() };
   });
 }
 
@@ -2195,6 +2428,15 @@ function wireEvents() {
     if (!generatedPw) { toast('请先在密码生成器中生成密码'); return; }
     $('ef-pass').value = generatedPw; $('ef-pass').type = 'text';
     toast('已填入生成的密码');
+  });
+  $('ef-url').addEventListener('blur', () => {
+    const v = $('ef-url').value.trim();
+    if (!v) return;
+    const norm = normalizeUrl(v);
+    $('ef-url').value = norm;
+    const hint = $('ef-url-hint');
+    if (!isValidUrl(norm)) { hint.textContent = '⚠️ URL 格式可能不正确'; hint.style.color = 'var(--warning)'; }
+    else { hint.textContent = ''; }
   });
   $('ef-pass').addEventListener('keydown', e => { if (e.key === 'Enter') saveEntry(false); });
   $('ef-tag-input').addEventListener('keydown', e => {
